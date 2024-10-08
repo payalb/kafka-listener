@@ -65,10 +65,9 @@ public class KafkaConsumerService {
 				consumer.resume(consumer.assignment()); // Resume the Kafka consumer when not paused
 			}
 			// Poll messages in batch
-			ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(pollDuration)); // Poll messages
-																										// every 1
-																										// second
-
+			ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(pollDuration)); // Wait for pollDuration to get the messages.
+																						
+			
 			// List to store all CompletableFutures for current batch
 			List<CompletableFuture<Void>> futures = new ArrayList<>();
 
@@ -93,7 +92,16 @@ public class KafkaConsumerService {
 				} catch (Exception e) {
 					e.printStackTrace();
 				}
-			}).join(); // Ensure we block until all messages are processed and offsets are committed
+			}); //.join(); // Not blocking main threads for all messages to be processed 
+			
+			 try {
+				 //Main thread to sleep for 10 mins and then poll again for messages.
+			        Thread.sleep(600000); // Sleep for 10 minutes
+			    } catch (InterruptedException e) {
+			        Thread.currentThread().interrupt(); // Restore the interrupted status
+			        System.out.println("Sleep interrupted. Exiting...");
+			        break; // Optionally exit or handle it as needed
+			   }
 		}
 	}
 
