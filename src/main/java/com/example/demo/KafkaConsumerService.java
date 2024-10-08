@@ -49,11 +49,16 @@ public class KafkaConsumerService {
 	}
 
 	public void listen() {
+
+		// List to store all CompletableFutures for current batch
+		List<CompletableFuture<Void>> futures = new ArrayList<>();
+
 		while (true) {
 			if (isPaused) {
 				if (!consumer.paused().containsAll(consumer.assignment())) {
-				System.out.println("Consumer is paused. Waiting...");
-				consumer.pause(consumer.assignment()); // Temporarily stops fetching records from the specified partition.
+					System.out.println("Consumer is paused. Waiting...");
+					consumer.pause(consumer.assignment()); // Temporarily stops fetching records from the specified
+															// partition.
 				}
 				try {
 					Thread.sleep(pauseDuration);
@@ -65,43 +70,42 @@ public class KafkaConsumerService {
 				consumer.resume(consumer.assignment()); // Resume the Kafka consumer when not paused
 			}
 			// Poll messages in batch
-			ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(pollDuration)); // Wait for pollDuration to get the messages.
-																						
-			
-			// List to store all CompletableFutures for current batch
-			List<CompletableFuture<Void>> futures = new ArrayList<>();
+			ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(pollDuration)); // Wait for the
+																										// pollDuration
+																										// to get the
+																										// messages.
 
 			// Process each record asynchronously
 			for (ConsumerRecord<String, String> record : records) {
 				CompletableFuture<Void> future = CompletableFuture.runAsync(() -> processMessage(record), service)
-						.exceptionally(ex -> {
-							System.out.println("Processing failed, retrying once...");
-							retryMessage(record); // Retry once if processing fails
+						.handle((result, ex) -> {
+							if (ex != null) {
+								System.out.println("Processing failed, retrying once...");
+								retryMessage(record); // Handle retry logic
+							}
 							return null;
 						});
 				futures.add(future);
 			}
 
-			// After all messages are processed, commit the offsets
-			CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+			try {
+				consumer.commitSync(); // Commit offset synchronously even before processing is done
+				System.out.println("Offsets committed after all tasks are done.");
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
 
-			allOf.thenRun(() -> {
-				try {
-					consumer.commitSync(); // Commit offset synchronously after all processing is done
-					System.out.println("Offsets committed after all tasks are done.");
-				} catch (Exception e) {
-					e.printStackTrace();
-				}
-			}); //.join(); // Not blocking main threads for all messages to be processed 
-			
-			 try {
-				 //Main thread to sleep for 10 mins and then poll again for messages.
-			        Thread.sleep(600000); // Sleep for 10 minutes
-			    } catch (InterruptedException e) {
-			        Thread.currentThread().interrupt(); // Restore the interrupted status
-			        System.out.println("Sleep interrupted. Exiting...");
-			        break; // Optionally exit or handle it as needed
-			   }
+			// Check for completion of futures, remove completed ones
+			futures.removeIf(CompletableFuture::isDone);
+
+			try {
+				// Main thread to sleep for 10 mins and then poll again for messages.
+				Thread.sleep(600000); // Sleep for 10 minutes
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt(); // Restore the interrupted status
+				System.out.println("Sleep interrupted. Exiting...");
+				break; // Optionally exit or handle it as needed
+			}
 		}
 	}
 
@@ -118,9 +122,12 @@ public class KafkaConsumerService {
 	private void processMessage(ConsumerRecord<String, String> record) {
 		try {
 			System.out.println("Message processed: " + record.value());
+			Thread.sleep(600000); // Sleep for 10 minutes, assuming processing takes 10 mins.
 			// Message processing
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt(); // Restore the interrupted status
+			System.out.println("Sleep interrupted. Exiting...");
 		} catch (Exception e) {
-
 			throw new RuntimeException("Processing failed", e); // Force retry logic
 
 		}
