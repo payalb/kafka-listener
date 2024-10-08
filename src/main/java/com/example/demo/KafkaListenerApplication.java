@@ -1,12 +1,19 @@
 package com.example.demo;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
@@ -19,18 +26,16 @@ public class KafkaListenerApplication {
 		
 	}
 
-
     @Bean
     public ExecutorService executorService() {
         return Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     }
     
     
- /*   @Bean
+  @Bean
     public KafkaConsumer<String, String> kafkaConsumer() {
         return new KafkaConsumer<>(consumerConfigs());
     }
-
     @Bean
     public Map<String, Object> consumerConfigs() {
         Map<String, Object> props = new HashMap<>();
@@ -45,7 +50,8 @@ public class KafkaListenerApplication {
     @Bean
     public ConsumerFactory<String, String> consumerFactory() {
         return new DefaultKafkaConsumerFactory<>(consumerConfigs());
-    }
+    } /* 
+
 
     @Bean
     public KafkaTemplate<String, String> kafkaTemplate() {

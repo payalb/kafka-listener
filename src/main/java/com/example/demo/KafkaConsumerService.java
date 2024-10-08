@@ -49,7 +49,7 @@ public class KafkaConsumerService {
 	}
 
 	public void listen() {
-
+		consumer.subscribe(List.of("my-topic"));
 		// List to store all CompletableFutures for current batch
 		List<CompletableFuture<Void>> futures = new ArrayList<>();
 
@@ -74,33 +74,36 @@ public class KafkaConsumerService {
 																										// pollDuration
 																										// to get the
 																										// messages.
+			if (records != null) {
 
-			// Process each record asynchronously
-			for (ConsumerRecord<String, String> record : records) {
-				CompletableFuture<Void> future = CompletableFuture.runAsync(() -> processMessage(record), service)
-						.handle((result, ex) -> {
-							if (ex != null) {
-								System.out.println("Processing failed, retrying once...");
-								retryMessage(record); // Handle retry logic
-							}
-							return null;
-						});
-				futures.add(future);
+				// Process each record asynchronously
+				for (ConsumerRecord<String, String> record : records) {
+					CompletableFuture<Void> future = CompletableFuture.runAsync(() -> processMessage(record), service)
+							.handle((result, ex) -> {
+								if (ex != null) {
+									System.out.println("Processing failed, retrying once...");
+									retryMessage(record); // Handle retry logic
+								}
+								return null;
+							});
+					futures.add(future);
+				}
+
+				try {
+					consumer.commitSync(); // Commit offset synchronously even before processing is done
+					System.out.println("Offsets committed after all tasks are done.");
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+
+				// Check for completion of futures, remove completed ones
+				futures.removeIf(CompletableFuture::isDone);
 			}
 
 			try {
-				consumer.commitSync(); // Commit offset synchronously even before processing is done
-				System.out.println("Offsets committed after all tasks are done.");
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-
-			// Check for completion of futures, remove completed ones
-			futures.removeIf(CompletableFuture::isDone);
-
-			try {
+				System.out.println("About to sleep for 10 mins");
 				// Main thread to sleep for 10 mins and then poll again for messages.
-				Thread.sleep(600000); // Sleep for 10 minutes
+				Thread.sleep(100000); // Sleep for 10 minutes
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt(); // Restore the interrupted status
 				System.out.println("Sleep interrupted. Exiting...");
