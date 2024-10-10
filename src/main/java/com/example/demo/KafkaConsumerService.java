@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -26,12 +27,12 @@ public class KafkaConsumerService {
 	ExecutorService service;
 
 	@Autowired
-	KafkaConsumer<String, String> consumer;
+	KafkaConsumer<Long, String> consumer;
 
 	@Autowired
-	DeadLetterLogRepository deadLetterLogRepository;
+	MessageRepository messageRepository;
 	@Autowired
-	KafkaTemplate<String, String> kafkaTemplate;
+	KafkaTemplate<Long, String> kafkaTemplate;
 
 	@Value("${kafka.poll.duration}") // Inject poll duration from configuration
 	private long pollDuration;
@@ -70,25 +71,17 @@ public class KafkaConsumerService {
 				consumer.resume(consumer.assignment()); // Resume the Kafka consumer when not paused
 			}
 			// Poll messages in batch
-			ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(pollDuration)); // Wait for the
+			ConsumerRecords<Long, String> records = consumer.poll(Duration.ofMillis(pollDuration)); // Wait for the
 																										// pollDuration
 																										// to get the
-																										// messages.
+				
+		
+			//Save messages first in db
 			if (records != null) {
-
-				// Process each record asynchronously
-				for (ConsumerRecord<String, String> record : records) {
-					CompletableFuture<Void> future = CompletableFuture.runAsync(() -> processMessage(record), service)
-							.handle((result, ex) -> {
-								if (ex != null) {
-									System.out.println("Processing failed, retrying once...");
-									retryMessage(record); // Handle retry logic
-								}
-								return null;
-							});
-					futures.add(future);
+				for (ConsumerRecord<Long, String> record : records) {
+					saveNewMessage(record);
 				}
-
+				//commit offset before processing
 				try {
 					consumer.commitSync(); // Commit offset synchronously even before processing is done
 					System.out.println("Offsets committed after all tasks are done.");
@@ -96,6 +89,21 @@ public class KafkaConsumerService {
 					e.printStackTrace();
 				}
 
+				// Process each record asynchronously
+				for (ConsumerRecord<Long, String> record : records) {
+				
+					CompletableFuture<Void> future = CompletableFuture.runAsync(() -> processMessage(record), service)
+							.handle((result, ex) -> {
+								if (ex != null) {
+									System.out.println("Processing failed, retrying once..."+ ex.getMessage());
+									retryMessage(record); // Handle retry logic
+								}
+								return null;
+							});
+					futures.add(future);
+				}
+
+				
 				// Check for completion of futures, remove completed ones
 				futures.removeIf(CompletableFuture::isDone);
 			}
@@ -112,25 +120,53 @@ public class KafkaConsumerService {
 		}
 	}
 
-	private void retryMessage(ConsumerRecord<String, String> record) {
+	private Message saveNewMessage(ConsumerRecord<Long, String> record) {
+		Message message = new Message("my-topic", record.key(), record.value(),
+				LocalDateTime.now());
+		Message message1= messageRepository.save(message);
+		return message1;
+	}
+
+	private void retryMessage(ConsumerRecord<Long, String> record) {
+		//service.shutdownNow();
 		CompletableFuture.runAsync(() -> processMessage(record), service).exceptionally(ex -> {
-			System.out.println("Retry failed after second attempt, sending to Dead Letter Queue.");
+			ex.printStackTrace();
+			System.out.println("Retry failed after second attempt, sending to Dead Letter Queue."+ ex.getMessage());
 			sendToDeadLetterQueue(record);
+			//service.shutdown();
 			return null;
 		}).join(); // Block until retry is complete
 
 	}
 
 	// Process the Kafka message
-	private void processMessage(ConsumerRecord<String, String> record) {
+	private void processMessage(ConsumerRecord<Long, String> record) {
 		try {
-			System.out.println("Message processed: " + record.value());
-			Thread.sleep(600000); // Sleep for 10 minutes, assuming processing takes 10 mins.
+			System.out.println("Message recieved: " + record.value());
+			//simulating error processing message..
+			if(record.value().contains("error")) {
+				throw new Exception("Message failed to process");
+			}
+			Thread.sleep(60000); // Sleep for 10 minutes, assuming processing takes 10 mins.
+			System.out.println("Processing logging into db "+ record.key());
+			 Optional<Message> logEntry = messageRepository.findById(record.key());
+			 Message updateMessage = null;
+			 if(logEntry.isEmpty()) {
+				 updateMessage = saveNewMessage(record);
+			 }else {
+				 updateMessage = logEntry.get();
+			 }
+			 updateMessage.setProcessed(true);
+			 updateMessage.setProcessedAt(LocalDateTime.now());
+			 messageRepository.save(updateMessage);
+			 System.out.println("Message processed: " + record.value());
 			// Message processing
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt(); // Restore the interrupted status
 			System.out.println("Sleep interrupted. Exiting...");
+			throw new RuntimeException("Processing failed", e); // Force retry logic
 		} catch (Exception e) {
+			e.printStackTrace();
 			throw new RuntimeException("Processing failed", e); // Force retry logic
 
 		}
@@ -138,13 +174,17 @@ public class KafkaConsumerService {
 
 	// Send failed messages to Dead Letter Queue. Can be kept on ddl for some
 	// duration and again sent back to my-topic
-	private void sendToDeadLetterQueue(ConsumerRecord<String, String> record) {
+	private void sendToDeadLetterQueue(ConsumerRecord<Long, String> record) {
 		// Save to db
-		DeadLetterLog logEntry = new DeadLetterLog("dead-letter-topic", record.key(), record.value(),
-				LocalDateTime.now());
-		deadLetterLogRepository.save(logEntry);
+	//	Message logEntry = new Message(Long.parseLong(record.key()) , "dead-letter-topic", record.key(), record.value(),LocalDateTime.now());
+	//	messageRepository.save(logEntry);
+		
+		 Optional<Message> logEntry = messageRepository.findById(record.key());
+		 Message updateMessage = logEntry.get();
+		 updateMessage.setTopic("dead-letter-topic");
+		 messageRepository.save(updateMessage);
 //  Can also be sent to dead letter queue for sending message back to main topic after delay or any other logic.
-		kafkaTemplate.send(new ProducerRecord<String, String>("dead-letter-topic", record.key(), record.value()));
+		kafkaTemplate.send(new ProducerRecord<Long, String>("dead-letter-topic", record.key(), record.value()));
 		System.out.println("Sent to Dead Letter Queue: " + record.value());
 	}
 }
